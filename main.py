@@ -5,6 +5,7 @@ import os
 import io
 import time
 import datetime
+from printJob import *
 
 from googleapiclient.http import MediaIoBaseDownload
 from apiclient import discovery
@@ -143,6 +144,8 @@ def getLatestOrders(sheetService, driveService):
                     id = link.strip()[33:]
                     print('Downloading ' + id)
                     downloadFile(driveService, id)
+
+                temp = printJob(row)
 
 
     lastSubDate = dt

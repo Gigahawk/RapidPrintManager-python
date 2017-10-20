@@ -1,2 +1,8 @@
 */client_secret.json
 client_secret.json
+*.gcode
+*/*.gcode
+*.stl
+*/*.stl
+__pycache__/
+*.py[cod]
