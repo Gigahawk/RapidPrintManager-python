@@ -1,14 +1,29 @@
 from enum import Enum
 import re
 from os.path import isfile
-from os import popen
+#from os import popen #apparently deprecated
+from subprocess import run
+from subprocess import PIPE
+from subprocess import STDOUT
+from math import pi
 
+
+area = pi*(1.75/2)**2 #mm2
+
+# densities in g/mm3
+d_pla = 0.00124 
+d_abs = 0.00110
+d_flex = 0.00125 # value from google, should do our own measurements in the future
+d_t_pc = 0.00121 # value from google, should do our own measurements in the future
+d_nylon = 0.00108 # value from google, for Taulman 645
+
+# Values are prices/mm: area(mm^2)*density(g/mm^3)*price($/g)
 class material(Enum):
-	PLA = 0
-	ABS = 1
-	Flex = 2
-	T_PolyCarb = 3
-	Nylon = 4
+	PLA = area*(d_pla)*(0.10)
+	ABS = area*(d_abs)*(0.15)
+	Flex = area*(d_flex)*(0.50)
+	T_PolyCarb = area*(d_t_pc)*(0.50)
+	Nylon = area*(d_nylon)*(0.50)
 	Other = 99
 
 class color(Enum):
@@ -42,6 +57,10 @@ class printJob(object):
 		# row[14] is how did you hear abt us
 		
 		self.sane = self.sanityCheck()
+
+		if not self.sane:
+			print("Print job is not valid, skipping...")
+			return
 
 		self.slice()
 
@@ -150,17 +169,40 @@ class printJob(object):
 
 		return sane
 
-	def slice(self):
-		if not self.sane:
-			print("Print job is not valid, skipping...")
-			return
-
+	def rotate(self):
+		# Spawning another python process cause im too lazy to write a wrapper for this tbh
 		for fileName in self.fileNames:
-			cmdText = "CuraEngine slice -v -j printDefinitions/prusa_i3_mk2.def.json -o " + fileName + ".gcode -l temp/" + fileName
-			print("Running " + cmdText)
-			cmdOut = popen(cmdText).read()
+			cmdText = "python3 Tweaker.py -i temp/" + fileName + " -x -o temp/" + fileName
+			print("Running" + cmdText)
+			cmdProcess = run(cmdText, shell = True)
 
-			print(cmdOut)
+
+
+
+	def slice(self):
+		for fileName in self.fileNames:
+			cmdText = "CuraEngine slice -v -j printDefinitions/prusa_i3_mk2.def.json -o temp/" + fileName + ".gcode -l temp/" + fileName
+			print("Running" + cmdText)
+			#cmdOut = popen(cmdText).read() # apparently deprecated
+			cmdProcess = run(cmdText,stdout = PIPE, stderr = STDOUT, shell = True)
+			cmdOut = cmdProcess.stdout.decode("utf-8")
+			cmdArray = cmdOut.splitlines() # SUPER INEFFICIENT BUT YOLO
+
+			# Get last 6 lines of output
+			outArray = cmdArray[-6:-1]
+			#outArray = outArray.append(cmdArray[-1]) #this is broken but its fine we dont need it anyways
+
+			for line in outArray:
+				print(line)
+
+			# length starts off in metres
+			length = float(re.search('[+-]?([0-9]*[.])?[0-9]+',outArray[0]).group())
+			length = length*1000
+
+			print("Using " + str(length) + "mm of filament")
+
+			fil_price = length*self.material.value
+			print("The print should cost " + str(fil_price))
 
 
 
