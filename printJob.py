@@ -6,6 +6,7 @@ from subprocess import run
 from subprocess import PIPE
 from subprocess import STDOUT
 from math import pi
+from time import sleep
 
 
 area = pi*(1.75/2)**2 #mm2
@@ -62,7 +63,8 @@ class printJob(object):
 			print("Print job is not valid, skipping...")
 			return
 
-		self.slice()
+		# optimize positions before slicing
+		self.process()
 
 	def parseSupport(self, s_support):
 		if s_support == "Yes":
@@ -162,47 +164,75 @@ class printJob(object):
 			print("Cannot print at " + str(self.infill) + "% infill")
 			sane = False
 
-		for fileName in self.fileNames:
-			if not isfile('temp/' + fileName):
-				print("Cannot find file " + fileName)
-				sane = False
+		
 
 		return sane
 
-	def rotate(self):
+	def rotate(self,fileName):
+		if not isfile('temp/' + fileName):
+			print("Tweaker cannot find file " + fileName)
+			return
+
 		# Spawning another python process cause im too lazy to write a wrapper for this tbh
+		cmdText = "python3 Tweaker-3/Tweaker.py -i temp/" + fileName + " -x -o temp/tweaked_" + fileName
+		print("Running" + cmdText)
+		cmdProcess = run(cmdText, shell = True)
+
+		# wait some time for file to update
+
+
+
+	def process(self):
 		for fileName in self.fileNames:
-			cmdText = "python3 Tweaker.py -i temp/" + fileName + " -x -o temp/" + fileName
-			print("Running" + cmdText)
-			cmdProcess = run(cmdText, shell = True)
+			self.rotate(fileName)
+			tweaked = self.slice("tweaked_"+fileName)
+			orig = self.slice(fileName)
+
+
+			if tweaked:
+				if tweaked.fil_price > 0 and tweaked.fil_price < orig.fil_price:
+					print("Tweaked price is sane: " + str(tweaked.fil_price))
+					continue
+
+			print("Tweaked price is invalid, using default: " + str(orig.fil_price))
 
 
 
 
-	def slice(self):
-		for fileName in self.fileNames:
-			cmdText = "CuraEngine slice -v -j printDefinitions/prusa_i3_mk2.def.json -o temp/" + fileName + ".gcode -l temp/" + fileName
-			print("Running" + cmdText)
-			#cmdOut = popen(cmdText).read() # apparently deprecated
-			cmdProcess = run(cmdText,stdout = PIPE, stderr = STDOUT, shell = True)
-			cmdOut = cmdProcess.stdout.decode("utf-8")
-			cmdArray = cmdOut.splitlines() # SUPER INEFFICIENT BUT YOLO
 
-			# Get last 6 lines of output
-			outArray = cmdArray[-6:-1]
-			#outArray = outArray.append(cmdArray[-1]) #this is broken but its fine we dont need it anyways
 
-			for line in outArray:
-				print(line)
+	def slice(self, fileName):
+		if not isfile('temp/' + fileName):
+			print("Slicer cannot find file " + fileName)
+			return
 
-			# length starts off in metres
-			length = float(re.search('[+-]?([0-9]*[.])?[0-9]+',outArray[0]).group())
-			length = length*1000
+		cmdText = "CuraEngine slice -v -j printDefinitions/prusa_i3_mk2.def.json -s center_object=true -s support_enable=true -o temp/" + fileName + ".gcode -l temp/" + fileName
+		print("Running" + cmdText)
+		#cmdOut = popen(cmdText).read() # apparently deprecated
+		cmdProcess = run(cmdText,stdout = PIPE, stderr = STDOUT, shell = True)
+		cmdOut = cmdProcess.stdout.decode("utf-8")
+		cmdArray = cmdOut.splitlines() # SUPER INEFFICIENT BUT YOLO
 
-			print("Using " + str(length) + "mm of filament")
+		# Get last 6 lines of output
+		outArray = cmdArray[-6:-1]
+		#outArray = outArray.append(cmdArray[-1]) #this is broken but its fine we dont need it anyways
 
-			fil_price = length*self.material.value
-			print("The print should cost " + str(fil_price))
+		for line in outArray:
+			print(line)
+
+		# length starts off in metres
+		length = float(re.search('[+-]?([0-9]*[.])?[0-9]+',outArray[0]).group())
+		length = length*1000
+
+		print("Using " + str(length) + "mm of filament")
+
+		fil_price = length*self.material.value
+		print("The print should cost " + str(fil_price))
+
+		# return an object with the data
+		out = type('gcodeStats', (object,),{'fil_price': fil_price, 'raw': outArray})
+
+		return out
 
 
 

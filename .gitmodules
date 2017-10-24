@@ -1,0 +1,6 @@
+[submodule "Tweaker-3"]
+	path = Tweaker-3
+	url = https://github.com/ChristophSchranz/Tweaker-3
+[submodule "Plater"]
+	path = Plater
+	url = https://github.com/Rhoban/Plater
