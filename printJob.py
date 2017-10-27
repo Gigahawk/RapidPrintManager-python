@@ -3,6 +3,7 @@ import re
 from os.path import isfile
 #from os import popen #apparently deprecated
 from subprocess import run
+from subprocess import Popen
 from subprocess import PIPE
 from subprocess import STDOUT
 from math import pi
@@ -40,7 +41,9 @@ class color(Enum):
 class printJob(object):
 
 
-	def __init__(self, row):
+	def __init__(self, driveService, row):
+		self.driveService = driveService
+
 		# row[0] is timestamp
 		self.name = str(row[1])
 		self.email = str(row[2])
@@ -58,6 +61,8 @@ class printJob(object):
 		# row[14] is how did you hear abt us
 		
 		self.sane = self.sanityCheck()
+
+		self.platerConf = ""
 
 		if not self.sane:
 			print("Print job is not valid, skipping...")
@@ -133,8 +138,12 @@ class printJob(object):
 		dlLinks = s_links.split(',')
 		out = []
 		for link in dlLinks:
-			out.append(link.strip()[33:]+'.stl')
+			id = link.strip()[33:]
+			fileName = self.driveService.files().get(fileId = id).execute().get('name')
+			fileName = fileName.replace(' ','').lower()
+			out.append(fileName)
 
+		print(out)
 		return out
 
 	def sanityCheck(self):
@@ -164,8 +173,6 @@ class printJob(object):
 			print("Cannot print at " + str(self.infill) + "% infill")
 			sane = False
 
-		
-
 		return sane
 
 	def rotate(self,fileName):
@@ -175,31 +182,59 @@ class printJob(object):
 
 		# Spawning another python process cause im too lazy to write a wrapper for this tbh
 		cmdText = "python3 Tweaker-3/Tweaker.py -i temp/" + fileName + " -x -o temp/tweaked_" + fileName
-		print("Running" + cmdText)
+		print("Running " + cmdText)
 		cmdProcess = run(cmdText, shell = True)
 
 		# wait some time for file to update
 
+	def plate(self):
+		with open('temp/plater.conf','w') as platerFile:
+			platerFile.write(self.platerConf)
+		cmdText = "plater -W 200 -H 200 -s 5 temp/plater.conf"
+		print("Running " + cmdText)
+		cmdProcess = run(cmdText, shell = True)
+		# cmdProcess = Popen(cmdText, stdin = PIPE, shell = True)
+		# cmdProcess.communicate(input = self.platerConf.encode('utf-8'))
+		# cmdProcess.stdin.close()
+		# if cmdProcess.wait(100) != 0:
+			# print("There were some errors")
 
 
 	def process(self):
 		for fileName in self.fileNames:
+			print("Checking for valid numbered filename")
+			copies = 1
+			try:
+				nameEntries = fileName.split('_')
+				copies = int(nameEntries[1])
+			except:
+				print("Couldn't find number of copies to print, assuming 1")
+
+			copies = str(copies)
+
+			print("Tweaking " + fileName)
 			self.rotate(fileName)
-			tweaked = self.slice("tweaked_"+fileName)
-			orig = self.slice(fileName)
+			sleep(1)
+			if isfile('temp/tweaked_' + fileName):
+				print("Adding tweaked_" + fileName + " to platerConf")
+				self.platerConf += ("tweaked_"+fileName+" "+copies+"\n")
+			else:
+				print("Couldn't find tweaked file, adding " + fileName + " to platerConf")
+				self.platerConf += (fileName+" "+copies+"\n")
 
 
-			if tweaked:
-				if tweaked.fil_price > 0 and tweaked.fil_price < orig.fil_price:
-					print("Tweaked price is sane: " + str(tweaked.fil_price))
-					continue
-
-			print("Tweaked price is invalid, using default: " + str(orig.fil_price))
+			# tweaked = self.slice("tweaked_"+fileName)
+			# orig = self.slice(fileName)
 
 
 
+			# if tweaked:
+			# 	if tweaked.fil_price > 0 and tweaked.fil_price < orig.fil_price:
+			# 		print("Tweaked price is sane: " + str(tweaked.fil_price))
+			# 		continue
 
-
+			# print("Tweaked price is invalid, using default: " + str(orig.fil_price))
+		self.plate()
 
 	def slice(self, fileName):
 		if not isfile('temp/' + fileName):

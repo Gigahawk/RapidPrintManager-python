@@ -6,3 +6,4 @@ client_secret.json
 */*.stl
 __pycache__/
 *.py[cod]
+temp/

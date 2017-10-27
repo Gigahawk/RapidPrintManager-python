@@ -109,6 +109,11 @@ def setLastDate(sheetService):
     print('set lastSubDate to ' + formatTime(lastSubDate))
 
 def downloadFile(driveService, id):
+    # Pull fileName and remove spaces
+    fileName = driveService.files().get(fileId = id).execute().get('name')
+    fileName = fileName.replace(' ','').lower()
+
+    print("Downloading " + fileName)
     request = driveService.files().get_media(fileId = id)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
@@ -117,7 +122,7 @@ def downloadFile(driveService, id):
         status, done = downloader.next_chunk()
         print("Download %d%%." % int(status.progress()*100))
 
-    with open('./temp/'+id+'.stl', 'wb') as f:
+    with open('./temp/'+fileName, 'wb') as f:
         f.write(fh.getvalue())
     
 def getLatestOrders(sheetService, driveService):
@@ -145,7 +150,7 @@ def getLatestOrders(sheetService, driveService):
                     print('Downloading ' + id)
                     downloadFile(driveService, id)
 
-                temp = printJob(row)
+                temp = printJob(driveService, row)
 
 
     lastSubDate = dt
