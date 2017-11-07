@@ -6,6 +6,7 @@ import io
 import time
 import datetime
 from printJob import *
+from settings import *
 
 from googleapiclient.http import MediaIoBaseDownload
 from apiclient import discovery
@@ -21,19 +22,23 @@ except ImportError:
 
 # If modifying these scopes, delete your previously saved credentials
 # at ~/.credentials/drive-python-quickstart.json
-SCOPES = ['https://www.googleapis.com/auth/drive.readonly','https://www.googleapis.com/auth/spreadsheets.readonly']
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly','https://www.googleapis.com/auth/spreadsheets.readonly','https://www.googleapis.com/auth/gmail.compose']
 CLIENT_SECRET_FILE = 'client_secret.json'
 APPLICATION_NAME = 'Drive API Python Quickstart'
 
+#initialize settings
+config = settings()
+
 # ID of sheet to monitor
-sheetID = '1bADd3atVGxZ3OOMXbQE4IVEflaW3Wf3JCHT6BASlsTk'
+sheetID = None;
 
 # Store the last submission timestamp
 lastSubDate = None; 
 
+waitForSheet = None;
+
 # Create a dictionary for fileNames and fileIds
 fileDict = {}
-
 
 def get_credentials():
     """Gets valid user credentials from storage.
@@ -93,20 +98,25 @@ def parseTime(dateString):
 
 def setLastDate(sheetService):
     global lastSubDate
-    sheetResponse = getSheetData(sheetService)
-    values = sheetResponse.get('values', [])
+    dateString = config.getString('temp','lastSubDate')
+    # Check if value exists in config
+    if not dateString:
+        print('Can''t find lastSubDate from config file, pulling from drive')
+        sheetResponse = getSheetData(sheetService)
+        values = sheetResponse.get('values', [])
 
-    if not values:
-        print('Warning: no last date found, is the spreadsheet empty?')
-        print('Setting lastSubDate to epoch as a fallback...')
-        lastSubDate = time.gmtime(0)
-        return
+        if not values:
+            print('Warning: no last date found, is the spreadsheet empty?')
+            print('Setting lastSubDate to epoch as a fallback...')
+            lastSubDate = time.gmtime(0)
+            return
 
-    row = values[len(values) - 1]
-    dateString = row[0]
-    #print('Found dateString ' + dateString + ' from sheet')
+        row = values[len(values) - 1]
+        dateString = row[0]
+
     lastSubDate = parseTime(dateString)
     print('set lastSubDate to ' + formatTime(lastSubDate))
+    config.setVal('temp','lastSubDate',dateString)
 
 def downloadFile(driveService, id):
     # Pull fileName and remove spaces
@@ -137,10 +147,13 @@ def getLatestOrders(sheetService, driveService):
     else: 
         print('Most recent orders')
         for row in values:
-            dt = parseTime(str(row[0]))
+            dateString = str(row[0])
+            dt = parseTime(dateString)
             if dt > lastSubDate:
                 newOrders.append(row)
                 print('New order found')
+                config.setVal('temp','lastSubDate',dateString)
+                resetDlFolder()
                 for cell in row:
                     print(str(cell) + ",")
 
@@ -167,7 +180,14 @@ def main():
     discoveryUrl = ('https://sheets.googleapis.com/$discovery/rest?version=v4')
     sheetService = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discoveryUrl)
 
+    global sheetID
+    global waitForSheet
+    sheetID = config.getString('user','sheetID')
+    print(config.getString('user','sheetID'))
+    waitForSheet = config.getBool('user','waitForSheet')
+    print(config.getBool('user','waitForSheet'))
     setLastDate(sheetService)
+
 
     # begin with last saved start token for this user or current
     # token from getStartPageToken()
@@ -178,38 +198,42 @@ def main():
     print("Start token: " + savedStartPageToken)
 
     while pageToken is not None:
-        print('Waiting for changes')
         request = driveService.changes().list(pageToken=pageToken, spaces='drive')
         changes = request.execute()
+        if waitForSheet:
+            print('Checking for changes')
+            for change in changes.get('changes'):
+                fileId = change.get('fileId')
+                c_time = change.get('time')
+                file = change.get('file')
+                fileName = ""
+                mimeType = ""
+                fullFileExtension = ""
+                
+                removed = change.get('removed')
 
-        for change in changes.get('changes'):
-            fileId = change.get('fileId')
-            c_time = change.get('time')
-            file = change.get('file')
-            fileName = ""
-            mimeType = ""
-            fullFileExtension = ""
-            
-            removed = change.get('removed')
+                if not removed:
+                    fileName = file.get('name')
+                    mimeType = file.get('mimeType')
+                    fullFileExtension = file.get('fullFileExtension')
+                    fileDict[fileId] = fileName
+                else:
+                    fileDict[fileId] = None
 
-            if not removed:
-                fileName = file.get('name')
-                mimeType = file.get('mimeType')
-                fullFileExtension = file.get('fullFileExtension')
-                fileDict[fileId] = fileName
-            else:
-                fileDict[fileId] = None
+                print("Change found for fileId: " + fileId)
+                print("time: " + c_time)
+                print("fileName: " + fileName)
+                print("fileType: " + str(fullFileExtension))
+                print("mimeType: " + mimeType)
+                print("deleted: " + str(removed))
 
-            print("Change found for fileId: " + fileId)
-            print("time: " + c_time)
-            print("fileName: " + fileName)
-            print("fileType: " + str(fullFileExtension))
-            print("mimeType: " + mimeType)
-            print("deleted: " + str(removed))
+                if mimeType == "application/vnd.google-apps.spreadsheet" and fileId == sheetID:
+                    print('Spreadsheet has been updated, pulling latest orders...')
+                    getLatestOrders(sheetService, driveService)
+        else:
+            print('Checking spreadsheet')
+            getLatestOrders(sheetService, driveService)
 
-            if mimeType == "application/vnd.google-apps.spreadsheet" and fileId == sheetID:
-                print('Spreadsheet has been updated, pulling most recent line...')
-                getLatestOrders(sheetService, driveService)
 
         newToken = changes.get('newStartPageToken')
         if newToken is not None:
@@ -221,8 +245,6 @@ def main():
             print("New pageToken: " + pageToken)
 
         time.sleep(2)
-
-
 
 if __name__ == '__main__':
     main()

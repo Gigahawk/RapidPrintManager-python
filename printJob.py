@@ -9,6 +9,8 @@ from subprocess import STDOUT
 from math import pi
 from time import sleep
 
+from emailSender import *
+
 
 area = pi*(1.75/2)**2 #mm2
 
@@ -38,10 +40,47 @@ class color(Enum):
 	Silver = 6
 	Custom = 99 
 
+class warnings(object):
+	def __init__(self, printOutput = False):
+		self.output = ""
+		self.printOutput = printOutput
+		self.hasWarning = False
+		self.hasError = False
+
+	def warn(self, e):
+		warning = "[Warning] %s\n" % (e)
+		if self.printOutput:
+			print(warning)
+		self.output += warning
+		self.hasWarning = True
+
+	def error(self, e):
+		error = "[Error] %s\n" % (e)
+		if self.printOutput:
+			print(error)
+		self.output += error
+		self.hasError = True
+
+class stlFile(object):
+	
+	def __init__(self,fileName):
+		self.name = fileName
+		self.copies = 1
+
+		print("Attempting to parse filename")
+		try:
+			nameArray = fileName.split('_')
+			self.copies = int(nameArray[1])
+		except:
+			self.log.warn("Warning: Could not parse copies for %s", self.fileName)
+
 class printJob(object):
 
-
 	def __init__(self, driveService, row):
+		self.emailSender = sender()
+
+		self.log = warnings(printOutput = True)
+
 		self.driveService = driveService
 
 		# row[0] is timestamp
@@ -56,19 +95,20 @@ class printJob(object):
 		self.material = self.parseMaterial(str(row[9]))
 		self.infill = self.parseInfill(str(row[10]))
 		self.color = self.parseColor(str(row[11]))
-		self.fileNames = self.parseFileNames(str(row[12]))
+		self.stlFiles = self.parseFileNames(str(row[12]))
 		self.couponCode = str(row[13])
 		# row[14] is how did you hear abt us
-		
+
 		self.sane = self.sanityCheck()
 
 		self.platerConf = ""
+		self.receipt = ""
 
 		if not self.sane:
+			# TODO: add email support
 			print("Print job is not valid, skipping...")
 			return
 
-		# optimize positions before slicing
 		self.process()
 
 	def parseSupport(self, s_support):
@@ -77,7 +117,7 @@ class printJob(object):
 		if s_support == "No":
 			return False
 
-		print("Warning: Could not parse support string, returning false as fallback")
+		print("Warning Could not parse support string, returning false as fallback")
 		return False
 
 	def parseResolution(self, s_resolution):
@@ -85,9 +125,9 @@ class printJob(object):
 			out = int(re.search('\d+',s_resolution).group())
 		except:
 			out = 200
-			print("Warning, couldn't parse resolution string, returning 200 microns as fallback")
+			self.log.warn("Couldn't parse resolution string, assuming 200 microns")
 
-		return out
+		return float(out)/1000.0
 
 	def parseMaterial(self, s_material):
 		if s_material == "PLA ($0.10/gram, Standard strength and durability with Wide Range of Colors Avaliable, Corn Based and biodegradable)":
@@ -101,7 +141,7 @@ class printJob(object):
 		if s_material == "Nylon ($0.50, Tough and Durable - Strongest and most difficult to Print)":
 			return material.Nylon
 
-		print("Warning: Other material selected")
+		self.log.warn("Other material selected")
 		return material.Other
 
 	def parseInfill(self, s_infill):
@@ -109,7 +149,7 @@ class printJob(object):
 			out = int(re.search('\d+',s_infill).group())
 		except:
 			out = 20
-			print("Warning, couldn't parse infill string, returning 20% as fallback")
+			self.log.warn("Couldn't parse infill, using 20% as fallback")
 
 		return out
 
@@ -131,7 +171,7 @@ class printJob(object):
 		if s_color == "I picked a special filament that has one color":
 			return color.Custom
 
-		print("Warning: Couldn't parse color, setting to white by default")
+		self.log.warn("Couldn't parse color, using white as default")
 		return color.White
 
 	def parseFileNames(self, s_links):
@@ -141,7 +181,7 @@ class printJob(object):
 			id = link.strip()[33:]
 			fileName = self.driveService.files().get(fileId = id).execute().get('name')
 			fileName = fileName.replace(' ','').lower()
-			out.append(fileName)
+			out.append(stlFile(fileName))
 
 		print(out)
 		return out
@@ -152,106 +192,121 @@ class printJob(object):
 		# Check colors and materials match up
 		if self.material == material.PLA:
 			if self.color == color.Custom:
-				print("PLA doesn't have custom colors")
+				self.log.error("PLA doesn't have custom colors")
 				sane = False
 		elif self.material == material.ABS:
 			if not (self.color == color.White or self.color == color.Black):
-				print("ABS is only available in black and white")
+				self.log.error("ABS is only available in black and white")
 				sane = False
 		else:
 			if self.color != color.Custom:
-				print("Specialty filaments are only available in one color")
+				self.log.error("Specialty filaments are only available in one color")
 				sane = False
 
 		# Check resolution makes sense
-		if self.resolution < 100 or self.resolution > 300:
-			print("Cannot print at " + str(self.resolution) + "microns")
+		if self.resolution < 0.1 or self.resolution > 0.3:
+			self.log.error("Cannot print at %.2f mm layer height" % self.resolution)
 			sane = False
 
 		# Check if infill makes sense
 		if self.infill < 0 or self.infill > 100:
-			print("Cannot print at " + str(self.infill) + "% infill")
+			self.log.error("Cannot print at %d%% infill" % self.infill)
 			sane = False
 
 		return sane
 
+	def runCommand(self, cmdString, getOutput = False, shell = True):
+		print("Running " + cmdString)
+		cmdProcess = run(cmdString, stdout = PIPE if getOutput else None, stderr = STDOUT if getOutput else None, shell = shell)
+
+		if getOutput:
+			return cmdProcess.stdout.decode("utf-8")
+
+	def process(self):
+		for file in self.stlFiles:
+			print("Tweaking " + file.name)
+			self.rotate(file.name)
+			sleep(1)
+			if isfile("temp/tweaked_%s" % (file.name)):
+				print("Adding tweaked_%s to platerConf" % (file.name))
+				self.platerConf += ("tweaked_%s %d\n" % (file.name, file.copies))
+			else:
+				print("Couldn't find tweaked file, adding %s to platerConf instead" % (file.name))
+				self.platerConf += ("%s %d\n" % (file.name, file.copies))
+
+		numPlates = self.plate()
+		plates = []
+
+		# plater returns files starting at index 1
+		for i in range(1,numPlates):
+			plate = "plate_"+str(i).zfill(3)+".stl"
+			print("Slicing " + plate)
+			plates.append(self.slice(plate))
+
+		self.calculateCost(plates)
+
+		self.sendEmail()
+
 	def rotate(self,fileName):
 		if not isfile('temp/' + fileName):
-			print("Tweaker cannot find file " + fileName)
+			print("Tweaker cannot find file %s" % (fileName))
 			return
 
 		# Spawning another python process cause im too lazy to write a wrapper for this tbh
-		cmdText = "python3 Tweaker-3/Tweaker.py -i temp/" + fileName + " -x -o temp/tweaked_" + fileName
-		print("Running " + cmdText)
-		cmdProcess = run(cmdText, shell = True)
-
-		# wait some time for file to update
+		cmdString = "python3 Tweaker-3/Tweaker.py -i temp/%s -x -o temp/tweaked_%s" % (fileName, fileName)
+		
+		self.runCommand(cmdString)
 
 	def plate(self):
 		with open('temp/plater.conf','w') as platerFile:
 			platerFile.write(self.platerConf)
-		cmdText = "plater -W 200 -H 200 -s 5 temp/plater.conf"
-		print("Running " + cmdText)
-		cmdProcess = run(cmdText, shell = True)
-		# cmdProcess = Popen(cmdText, stdin = PIPE, shell = True)
-		# cmdProcess.communicate(input = self.platerConf.encode('utf-8'))
-		# cmdProcess.stdin.close()
-		# if cmdProcess.wait(100) != 0:
-			# print("There were some errors")
 
+		cmdString = "plater -v -W 200 -H 200 temp/plater.conf"
 
-	def process(self):
-		for fileName in self.fileNames:
-			print("Checking for valid numbered filename")
-			copies = 1
-			try:
-				nameEntries = fileName.split('_')
-				copies = int(nameEntries[1])
-			except:
-				print("Couldn't find number of copies to print, assuming 1")
+		# SUPER INEFFICIENT BUT YOLO
+		cmdOut = self.runCommand(cmdString, getOutput = True)
+		cmdArray = cmdOut.splitlines()
 
-			copies = str(copies)
+		print(cmdOut)
 
-			print("Tweaking " + fileName)
-			self.rotate(fileName)
-			sleep(1)
-			if isfile('temp/tweaked_' + fileName):
-				print("Adding tweaked_" + fileName + " to platerConf")
-				self.platerConf += ("tweaked_"+fileName+" "+copies+"\n")
-			else:
-				print("Couldn't find tweaked file, adding " + fileName + " to platerConf")
-				self.platerConf += (fileName+" "+copies+"\n")
+		exportLines = 0
+		for line in cmdArray:
+			if "Exporting" in line:
+				exportLines += 1
 
+		print("Generated %d plates" % (exportLines-1))
 
-			# tweaked = self.slice("tweaked_"+fileName)
-			# orig = self.slice(fileName)
-
-
-
-			# if tweaked:
-			# 	if tweaked.fil_price > 0 and tweaked.fil_price < orig.fil_price:
-			# 		print("Tweaked price is sane: " + str(tweaked.fil_price))
-			# 		continue
-
-			# print("Tweaked price is invalid, using default: " + str(orig.fil_price))
-		self.plate()
+		return exportLines
 
 	def slice(self, fileName):
-		if not isfile('temp/' + fileName):
-			print("Slicer cannot find file " + fileName)
+		if not isfile("temp/%s" % (fileName)):
+			print("Slicer cannot find file %s" % (fileName))
 			return
 
-		cmdText = "CuraEngine slice -v -j printDefinitions/prusa_i3_mk2.def.json -s center_object=true -s support_enable=true -o temp/" + fileName + ".gcode -l temp/" + fileName
-		print("Running" + cmdText)
-		#cmdOut = popen(cmdText).read() # apparently deprecated
-		cmdProcess = run(cmdText,stdout = PIPE, stderr = STDOUT, shell = True)
-		cmdOut = cmdProcess.stdout.decode("utf-8")
-		cmdArray = cmdOut.splitlines() # SUPER INEFFICIENT BUT YOLO
+		# (infill_line_width)*100/(infill_sparse_density)*(2 if grid...)
+		infill_line_distance = 0 if not self.infill else (0.4)*100/self.infill*2
+
+		cmdString = ("CuraEngine slice -v "
+			         "-j printDefinitions/prusa_i3_mk2.def.json "
+			         "-s center_object=true "
+			         "-s support_enable=true "
+			         "-s layer_height=%.3f " 
+			         "-s infill_line_distance=%f "
+			         "-s wall_thickness=1.2 " 
+			         "-s top_thickness=0.8 "
+			         "-s bottom_thickness=0.8 "
+			         "-o temp/%s.gcode "
+			         "-l temp/%s") % (self.resolution, infill_line_distance, fileName, fileName)
+
+		# SUPER INEFFICIENT BUT YOLO
+		cmdOut = self.runCommand(cmdString, getOutput = True)
+		cmdArray = cmdOut.splitlines() 
 
 		# Get last 6 lines of output
 		outArray = cmdArray[-6:-1]
 		#outArray = outArray.append(cmdArray[-1]) #this is broken but its fine we dont need it anyways
 
+		print("Print statistics:")
 		for line in outArray:
 			print(line)
 
@@ -259,15 +314,103 @@ class printJob(object):
 		length = float(re.search('[+-]?([0-9]*[.])?[0-9]+',outArray[0]).group())
 		length = length*1000
 
-		print("Using " + str(length) + "mm of filament")
+		print("Using %f mm of filament" % length)
 
 		fil_price = length*self.material.value
-		print("The print should cost " + str(fil_price))
+		print("The print should cost $%.f" % (fil_price))
 
 		# return an object with the data
 		out = type('gcodeStats', (object,),{'fil_price': fil_price, 'raw': outArray})
 
 		return out
+
+	def calculateCost(self, plates):
+		receipt = []
+
+		numPlates = len(plates)
+
+		receipt.append(("Setup Costs:", 5.00, numPlates))
+
+		if self.color == color.Gold or self.color == color.Silver:
+			colorCost = 1.00
+		else:
+			colorCost = 0
+
+		receipt.append(("Color:", colorCost, numPlates))
+
+		lh = self.resolution
+
+		if (lh == 0.1 or (lh != 0.2 and lh != 0.3)):
+			layerCost = 2.00
+		else:
+			layerCost = 0
+
+		receipt.append(("Resolution:", layerCost, numPlates))
+
+
+		for plate in plates:			
+			index = plates.index(plate)
+			cost = plate.fil_price
+			receipt.append(("Plate %d:" % (index+1), cost, 1))
+
+		receiptString = ""
+		totalCost = 0
+		for entry in receipt:
+			if not entry[1]:
+				continue
+
+			cost = round(entry[1]*100)/100
+
+			if not "Plate" in entry[0]:
+				receiptString += "%s\t$%.2f x%d\n" % (entry[0], cost, entry[2])
+				totalCost += entry[2]*cost
+			else:
+				receiptString += "%s\t$%.2f\n" % (entry[0], cost)
+				totalCost += cost
+
+		roundedCost = round(totalCost*4)/4
+
+		receiptString += "Total Cost: $%.2f\n" % (totalCost)
+		
+		receiptString += "Rounded Cost: $%.2f\n" % (roundedCost)
+
+		self.receipt = receiptString
+		print(receiptString)
+
+	def sendEmail(self):
+		print("Generating email...")
+		msg = "Hello %s, here is the quote for your print order:\n\n" % (self.name)
+		msg += self.receipt
+
+		if self.log.hasError:
+			msg += "\n There were some problems with your order, please resubmit your order with valid options \n"
+			msg += self.log.output
+		elif self.log.hasWarning:
+			msg += "\n There were some problems with your order which we have tried to correct. If you are not satisfied, please resubmit your order. \n"
+			msg += self.log.output
+
+		msg += "\n We will send you another email shortly to confirm payment times, if you would like to cancel your order, please say so smth smth lol\n"
+		msg += "\n Thanks, RapidBot"
+
+		print(msg)
+
+		self.emailSender.sendMessage(msg, self.email)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
