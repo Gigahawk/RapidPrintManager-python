@@ -1,25 +1,26 @@
 from enum import Enum
 import re
-from os.path import isfile
-#from os import popen #apparently deprecated
+from os.path import isfile,join
+from os import listdir
+
 from subprocess import run
 from subprocess import Popen
 from subprocess import PIPE
 from subprocess import STDOUT
 from math import pi
-from time import sleep
 
 from emailSender import *
+from settings import *
 
 import httplib2
 import os
+
+import random
 
 from apiclient import discovery
 from oauth2client import client
 from oauth2client import tools
 from oauth2client.file import Storage
-
-
 
 area = pi*(1.75/2)**2 #mm2
 
@@ -85,7 +86,9 @@ class stlFile(object):
 
 class printJob(object):
 
-	def __init__(self, driveService, sheetService, discountID, row):
+	def __init__(self, driveService, sheetService, discountID, rosterID, row):
+		self.config = settings()
+
 		self.emailSender = sender()
 
 		self.log = warnings(printOutput = True)
@@ -93,6 +96,11 @@ class printJob(object):
 		self.driveService = driveService
 		self.sheetService = sheetService
 		self.discountID = discountID
+		self.rosterID = rosterID
+
+		print("rosterID is " + self.rosterID)
+
+		self.roster = self.config.getStrList('temp','pastHandlers')
 
 		# row[0] is timestamp
 		self.name = str(row[1])
@@ -121,6 +129,37 @@ class printJob(object):
 			return
 
 		self.process()
+
+	def selectFromRoster(self):
+		range = 'Sheet1!A2:B'
+		sheetRequest = self.sheetService.spreadsheets().values().get(spreadsheetId = self.rosterID, range = range).execute()
+		values = sheetRequest.get('values', [])
+		fullList = [str(row[1]) for row in values]
+		checkList = list(set(fullList)-set(self.roster))
+
+		if not checkList:
+			print("Checklist is empty, resetting...")
+			checkList = fullList
+			self.roster = []
+
+		print("Selecting a user from")
+		print(checkList)
+
+		handlerMail = random.choice(checkList)
+		
+
+		self.roster.append(handlerMail)
+		self.config.setStrList('temp','pastHandlers',self.roster)
+
+		handlerName = ""
+
+		for row in values:
+			if handlerMail == row[1]:
+				handlerName = row[0]
+
+		print("Selected " + handlerName)
+
+		return (handlerName, handlerMail)
 
 	def parseSupport(self, s_support):
 		if s_support == "Yes":
@@ -393,7 +432,6 @@ class printJob(object):
 
 		return discount
 
-
 	def checkDiscount(self, cost):
 		range = 'Sheet1!A2:D'
 		sheetRequest = self.sheetService.spreadsheets().values().get(spreadsheetId = self.discountID, range = range).execute()
@@ -447,10 +485,10 @@ class printJob(object):
 			cost = round(entry[1]*100)/100
 
 			if not "Plate" in entry[0]:
-				receiptString += "%s\t$%.2f x%d\n" % (entry[0], cost, entry[2])
+				receiptString += "%s\t\t$%.2f x%d\n" % (entry[0], cost, entry[2])
 				totalCost += entry[2]*cost
 			else:
-				receiptString += "%s\t$%.2f\n" % (entry[0], cost)
+				receiptString += "%s\t\t$%.2f\n" % (entry[0], cost)
 				totalCost += cost
 
 		discount = self.checkDiscount(totalCost)
@@ -459,48 +497,66 @@ class printJob(object):
 
 		roundedCost = round(discountedCost*4)/4
 
-		receiptString += "Total Cost: $%.2f\n" % (totalCost)
+		receiptString += "Total Cost:\t\t$%.2f\n" % (totalCost)
 
 		if discount:
-			receiptString += "Discount: $%.2f\n" % (float(discount))
-			receiptString += "Discounted Cost: $%.2f\n" % (discountedCost)
+			receiptString += "Discount: \t\t$%.2f\n" % (float(discount))
+			receiptString += "Discounted Cost:\t$%.2f\n" % (discountedCost)
 		
-		receiptString += "Rounded Cost: $%.2f\n" % (roundedCost)
+		receiptString += "Final Cost:\t\t$%.2f\n" % (roundedCost)
 
 		self.receipt = receiptString
 		print(receiptString)
 
 	def sendEmail(self):
-		print("Generating email...")
+		print("Selecting handler...")
+		handler = self.selectFromRoster()
+
+		print("Generating customer email...")
+
+		subject = "UBC Rapid Printing Service Quote"
+
 		msg = "Hello %s, here is the quote for your print order:\n\n" % (self.name)
 		msg += self.receipt
 
 		if self.log.hasError:
-			msg += "\n There were some problems with your order, please resubmit your order with valid options \n"
+			msg += "\nThere were some problems with your order, please resubmit your order with valid options \n"
 			msg += self.log.output
 		elif self.log.hasWarning:
-			msg += "\n There were some problems with your order which we have tried to correct. If you are not satisfied, please resubmit your order. \n"
+			msg += "\nThere were some problems with your order which we have tried to correct. If you are not satisfied, please resubmit your order. \n"
 			msg += self.log.output
 
-		msg += "\n We will send you another email shortly to confirm payment times, if you would like to cancel your order, please say so smth smth lol\n"
-		msg += "\n Thanks, RapidBot"
+		msg += "\nYou will recieve another email from %s shortly to confirm payment times, if you would like to cancel your order, please say so smth smth lol\n" % (handler[1])
+		msg += "\nThanks, RapidBot"
 
 		print(msg)
 
-		self.emailSender.sendMessage(msg, self.email)
+		self.emailSender.sendMessage(msg, self.email, handler[1], subject)
 
+		print("Getting list of files...")
 
+		files = [join('temp', f) for f in listdir('temp') if isfile(join('temp', f)) and not 'gcode' in f and not 'conf' in f]
+		print(files)
 
+		print("Generating handler email...")
 
+		subject = "UBC Rapid: New order"
 
+		msg = "Hello %s, you have been selected to handle %s's order.\n" % (handler[0], self.name)
+		msg += "Please look for the email that was sent to the customer for more details.\n"
+		msg += "Attached you will find the original files as well as the files generated by RapidBot used to calculate the print cost.\n"
+		msg += "The attatched plate*.stl files are SUGGESTIONS as to how to layout the print, please your own judgement when you go to generate your gcode.\n"
+		msg += "If you don't see any tweaked_*.stl files it means that the tweaker was unable to process the models and you should do it yourself.\n"
 
+		msg += "\nThanks, RapidBot"
 
+		print(msg)
 
+		print("Waiting 5 seconds....")
 
+		sleep(5)
 
-
-
-
+		self.emailSender.sendMessage(msg, handler[1], '', subject, files = files)
 
 
 

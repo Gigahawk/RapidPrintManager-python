@@ -13,6 +13,15 @@ class settings(object):
 		if flush:
 			self.flush() 
 
+	def setStrList(self,section,key,array, flush=True):
+		out = ""
+		for item in array:
+			out += str(item) + ','
+		out = out[:-1]
+		self.config[section][key] = out
+		if flush:
+			self.flush()
+
 	def getInt(self,section,key):
 		return int(self.config[section][key])
 
@@ -25,6 +34,14 @@ class settings(object):
 	def getString(self,section,key):
 		return self.config[section][key]
 
+	def getStrList(self, section,key):
+		listStr = self.config[section][key]
+		if listStr:
+			return listStr.split(',')
+		else:
+			return []
+
 	def flush(self):
 		with open('settings.ini','r+') as fp:
 			self.config.write(fp)
+

@@ -32,6 +32,7 @@ config = settings()
 # ID of sheet to monitor
 sheetID = None;
 discountID = None;
+rosterID = None;
 
 # Store the last submission timestamp
 lastSubDate = None; 
@@ -164,7 +165,7 @@ def getLatestOrders(sheetService, driveService):
                     print('Downloading ' + id)
                     downloadFile(driveService, id)
 
-                temp = printJob(driveService,sheetService,discountID, row)
+                temp = printJob(driveService,sheetService,discountID, rosterID, row)
 
 
     lastSubDate = dt
@@ -183,10 +184,13 @@ def main():
 
     global sheetID
     global discountID
+    global rosterID
     global waitForSheet
+
     sheetID = config.getString('user','sheetID')
     print(config.getString('user','sheetID'))
     discountID = config.getString('user','discountID')
+    rosterID = config.getString('user','rosterID')
     waitForSheet = config.getBool('user','waitForSheet')
     print(config.getBool('user','waitForSheet'))
     setLastDate(sheetService)
