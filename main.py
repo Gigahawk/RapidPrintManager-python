@@ -31,6 +31,7 @@ config = settings()
 
 # ID of sheet to monitor
 sheetID = None;
+discountID = None;
 
 # Store the last submission timestamp
 lastSubDate = None; 
@@ -163,7 +164,7 @@ def getLatestOrders(sheetService, driveService):
                     print('Downloading ' + id)
                     downloadFile(driveService, id)
 
-                temp = printJob(driveService, row)
+                temp = printJob(driveService,sheetService,discountID, row)
 
 
     lastSubDate = dt
@@ -181,9 +182,11 @@ def main():
     sheetService = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discoveryUrl)
 
     global sheetID
+    global discountID
     global waitForSheet
     sheetID = config.getString('user','sheetID')
     print(config.getString('user','sheetID'))
+    discountID = config.getString('user','discountID')
     waitForSheet = config.getBool('user','waitForSheet')
     print(config.getBool('user','waitForSheet'))
     setLastDate(sheetService)

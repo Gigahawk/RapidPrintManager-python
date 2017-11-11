@@ -11,6 +11,15 @@ from time import sleep
 
 from emailSender import *
 
+import httplib2
+import os
+
+from apiclient import discovery
+from oauth2client import client
+from oauth2client import tools
+from oauth2client.file import Storage
+
+
 
 area = pi*(1.75/2)**2 #mm2
 
@@ -76,12 +85,14 @@ class stlFile(object):
 
 class printJob(object):
 
-	def __init__(self, driveService, row):
+	def __init__(self, driveService, sheetService, discountID, row):
 		self.emailSender = sender()
 
 		self.log = warnings(printOutput = True)
 
 		self.driveService = driveService
+		self.sheetService = sheetService
+		self.discountID = discountID
 
 		# row[0] is timestamp
 		self.name = str(row[1])
@@ -324,6 +335,80 @@ class printJob(object):
 
 		return out
 
+	def parseDiscount(self, row,cost):
+		conditions = str(row[2]).split(',')
+
+		if '$' in str(row[1]):
+			discount = int(re.search('\d+',str(row[1])).group())
+		elif '%' in str(row[1]):
+			percent = int(re.search('\d+',str(row[1])).group())
+			discount = cost*percent/100
+
+		print("Cost is " + str(cost))
+
+		print("Discount should be " + str(discount))
+
+		for condition in conditions:
+			print("Checking condition " + condition)
+			if 'cost' in condition:
+				limit = int(re.search('\d+',condition).group())
+				print("Found limit " + str(limit))
+				if '<=' in condition:
+					if cost <= limit:
+						print("condition passed <=")
+						continue
+					else:
+						print("condition failed <=")
+						return 0
+				if '>=' in condition:
+					if cost >= limit:
+						print("condition passed >=")
+						continue
+					else:
+						print("condition failed >=")
+						return 0
+				if '>' in condition:
+					if cost > limit:
+						print("condition passed >")
+						continue
+					else:
+						print("condition failed >")
+						return 0
+				if '<' in condition:
+					if cost < limit:
+						print("condition passed <")
+						continue
+					else:
+						print("condition failed <")
+						return 0
+
+			if 'maxdiscount' in condition:
+				maxdiscount = int(re.search('\d+',condition).group())
+				print("Found maxdiscount " + str(maxdiscount))
+				if maxdiscount < discount:
+					print("Discont > maxdiscount, setting to max")
+					discount = maxdiscount
+
+		print("Final discount: " + str(discount))
+
+		return discount
+
+
+	def checkDiscount(self, cost):
+		range = 'Sheet1!A2:D'
+		sheetRequest = self.sheetService.spreadsheets().values().get(spreadsheetId = self.discountID, range = range).execute()
+		values = sheetRequest.get('values', [])
+		discount = 0
+
+		for row in values:
+			if self.couponCode.lower() == str(row[0]).lower():
+				print("Matched couponCode to " + str(row[0]).lower() )
+				discount = self.parseDiscount(row, cost)
+				if discount:
+					break
+
+		return discount
+
 	def calculateCost(self, plates):
 		receipt = []
 
@@ -368,9 +453,17 @@ class printJob(object):
 				receiptString += "%s\t$%.2f\n" % (entry[0], cost)
 				totalCost += cost
 
-		roundedCost = round(totalCost*4)/4
+		discount = self.checkDiscount(totalCost)
+
+		discountedCost = totalCost - discount
+
+		roundedCost = round(discountedCost*4)/4
 
 		receiptString += "Total Cost: $%.2f\n" % (totalCost)
+
+		if discount:
+			receiptString += "Discount: $%.2f\n" % (float(discount))
+			receiptString += "Discounted Cost: $%.2f\n" % (discountedCost)
 		
 		receiptString += "Rounded Cost: $%.2f\n" % (roundedCost)
 
