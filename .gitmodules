@@ -4,3 +4,15 @@
 [submodule "Plater"]
 	path = Plater
 	url = https://github.com/Rhoban/Plater
+[submodule "CuraEngine"]
+	path = CuraEngine
+	url = https://github.com/Ultimaker/CuraEngine.git
+[submodule "Cura"]
+	path = Cura
+	url = https://github.com/Ultimaker/Cura.git
+[submodule "protobuf"]
+	path = protobuf
+	url = https://github.com/google/protobuf.git
+[submodule "libArcus"]
+	path = libArcus
+	url = https://github.com/Ultimaker/libArcus.git
